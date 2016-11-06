@@ -1413,20 +1413,20 @@ void initServerConfig(void) {
 
     getRandomHexChars(server.runid,REDIS_RUN_ID_SIZE);
     server.configfile = NULL;
-    server.hz = REDIS_DEFAULT_HZ;
-    server.runid[REDIS_RUN_ID_SIZE] = '\0';
+    server.hz = REDIS_DEFAULT_HZ; //调用serverCron的频率
+    server.runid[REDIS_RUN_ID_SIZE] = '\0';  //运行实例的ID
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
-    server.port = REDIS_SERVERPORT;
+    server.port = REDIS_SERVERPORT;  //Redis默认端口6379
     server.tcp_backlog = REDIS_TCP_BACKLOG;
     server.bindaddr_count = 0;
     server.unixsocket = NULL;
     server.unixsocketperm = REDIS_DEFAULT_UNIX_SOCKET_PERM;
     server.ipfd_count = 0;
     server.sofd = -1;
-    server.dbnum = REDIS_DEFAULT_DBNUM;
-    server.verbosity = REDIS_DEFAULT_VERBOSITY;
-    server.maxidletime = REDIS_MAXIDLETIME;
-    server.tcpkeepalive = REDIS_DEFAULT_TCP_KEEPALIVE;
+    server.dbnum = REDIS_DEFAULT_DBNUM;  //Redis默认会创建16个数据库，数据库可以用select命令切换
+    server.verbosity = REDIS_DEFAULT_VERBOSITY;  //日志级别
+    server.maxidletime = REDIS_MAXIDLETIME; //最大空闲时间：如果client连接到server空闲时间达到一定时间的时候，就会自动断开 0表示一直连接，不自动断开
+    server.tcpkeepalive = REDIS_DEFAULT_TCP_KEEPALIVE; //TCP keep-alive机制，心跳包的时间间隔。该值为0的时候不设置
     server.active_expire_enabled = 1;
     server.client_max_querybuf_len = REDIS_MAX_QUERYBUF_LEN;
     server.saveparams = NULL;
@@ -1435,7 +1435,7 @@ void initServerConfig(void) {
     server.syslog_enabled = REDIS_DEFAULT_SYSLOG_ENABLED;
     server.syslog_ident = zstrdup(REDIS_DEFAULT_SYSLOG_IDENT);
     server.syslog_facility = LOG_LOCAL0;
-    server.daemonize = REDIS_DEFAULT_DAEMONIZE;
+    server.daemonize = REDIS_DEFAULT_DAEMONIZE;  //是否daemon形式运行程序
     server.aof_state = REDIS_AOF_OFF;
     server.aof_fsync = REDIS_DEFAULT_AOF_FSYNC;
     server.aof_no_fsync_on_rewrite = REDIS_DEFAULT_AOF_NO_FSYNC_ON_REWRITE;
@@ -1757,13 +1757,16 @@ void resetServerStats(void) {
     server.aof_delayed_fsync = 0;
 }
 
+/* 对redis server进行初始化
+ */
 void initServer(void) {
     int j;
-
+    //忽略SIGHUP和SIGPIPE信号，设置SIGTERM和SIGINT的handler，均为sigShutdownHandler
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
+    //syslog_enabled默认不开启
     if (server.syslog_enabled) {
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             server.syslog_facility);
@@ -1849,6 +1852,7 @@ void initServer(void) {
 
     /* Create the serverCron() time event, that's our main way to process
      * background operations. */
+    /* 设置时间时间结构体 */
     if(aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         redisPanic("Can't create the serverCron time event.");
         exit(1);
@@ -3408,7 +3412,9 @@ void createPidFile(void) {
 void daemonize(void) {
     int fd;
 
+    // 调用fork，父进程终止，子进程在后台daemon执行
     if (fork() != 0) exit(0); /* parent exits */
+    // 子进程脱离终端控制，成为新的会话组长
     setsid(); /* create a new session */
 
     /* Every output goes to /dev/null. If Redis is daemonized but
@@ -3540,6 +3546,10 @@ void memtest(size_t megabytes, int passes);
 
 /* Returns 1 if there is --sentinel among the arguments or if
  * argv[0] is exactly "redis-sentinel". */
+/*
+ * 是否以sentinel模式启动 (直接运行redis-sential或者redis-server --sentinel)
+ * 1是sentinel模式 0不是sentinel模式
+ */
 int checkForSentinelMode(int argc, char **argv) {
     int j;
 
@@ -3634,12 +3644,17 @@ int main(int argc, char **argv) {
         }
 
         /* First argument is the config file name? */
+        /* redis-server filename 直接指定配置文件名 */
         if (argv[j][0] != '-' || argv[j][1] != '-')
             configfile = argv[j++];
         /* All the other options are parsed and conceptually appended to the
          * configuration file. For instance --port 6380 will generate the
          * string "port 6380\n" to be parsed after the actual file name
          * is parsed, if any. */
+        /* 将 '-' 指定的配置项收集起来 
+         * redis-server -x1 option1 -x2 option2 -x3 option3 按照下面存储方式存储:"x1 option1\nx2 options\nx3 option3"
+         * redis-server configure_file -x1 option1 -x2 option2 -x3 option3 按照下面存储方式存储:"x1 option1\nx2 options\nx3 option3", 
+         * configure_file存放在变量configfile中*/
         while(j != argc) {
             if (argv[j][0] == '-' && argv[j][1] == '-') {
                 /* Option name */

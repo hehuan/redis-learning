@@ -60,15 +60,20 @@
     #endif
 #endif
 
+/* 创建事件循环 setsize：最大的文件描述符数量 */
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
 
     if ((eventLoop = zmalloc(sizeof(*eventLoop))) == NULL) goto err;
+
+    //分配文件事件结构体
     eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize);
+    //分配触发时间结构体 [[ 'fired'先当作'被触发的'理解 ]]
     eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize);
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
+    //lastTime用于检测时钟偏移
     eventLoop->lastTime = time(NULL);
     eventLoop->timeEventHead = NULL;
     eventLoop->timeEventNextId = 0;
@@ -177,6 +182,7 @@ int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
     return fe->mask;
 }
 
+//实际上就是gettimeofday的封装，获取当前秒数和毫秒数
 static void aeGetTime(long *seconds, long *milliseconds)
 {
     struct timeval tv;
@@ -189,9 +195,11 @@ static void aeGetTime(long *seconds, long *milliseconds)
 static void aeAddMillisecondsToNow(long long milliseconds, long *sec, long *ms) {
     long cur_sec, cur_ms, when_sec, when_ms;
 
+    //获取当前时间
     aeGetTime(&cur_sec, &cur_ms);
     when_sec = cur_sec + milliseconds/1000;
     when_ms = cur_ms + milliseconds%1000;
+    //ms慢1000需要进一秒上去
     if (when_ms >= 1000) {
         when_sec ++;
         when_ms -= 1000;
@@ -204,14 +212,19 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
         aeTimeProc *proc, void *clientData,
         aeEventFinalizerProc *finalizerProc)
 {
+    // [[这里的id和timeEventNextId暂时没看懂]]
+    // 按字面的意思是最大的时间事件ID
     long long id = eventLoop->timeEventNextId++;
     aeTimeEvent *te;
 
     te = zmalloc(sizeof(*te));
     if (te == NULL) return AE_ERR;
     te->id = id;
+    //计算超时时间
     aeAddMillisecondsToNow(milliseconds,&te->when_sec,&te->when_ms);
+    //定时回调函数，外层调用传入的是serverCron函数
     te->timeProc = proc;
+    //外层调用传入的finalizerProc和clientData都是NULL
     te->finalizerProc = finalizerProc;
     te->clientData = clientData;
     te->next = eventLoop->timeEventHead;
