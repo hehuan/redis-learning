@@ -38,6 +38,7 @@
 
 typedef char *sds;
 
+/* sds字符串的头节点信息 len是总长度 free是未使用的长度 buf是实际数据 */
 struct sdshdr {
     unsigned int len;
     unsigned int free;
@@ -49,6 +50,7 @@ static inline size_t sdslen(const sds s) {
     return sh->len;
 }
 
+/* 返回free，获取当前sds还有多少字节可以使用 */
 static inline size_t sdsavail(const sds s) {
     struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
     return sh->free;
