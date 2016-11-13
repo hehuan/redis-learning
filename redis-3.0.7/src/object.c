@@ -36,6 +36,7 @@
 #define strtold(a,b) ((long double)strtod((a),(b)))
 #endif
 
+/* 创建对象 */
 robj *createObject(int type, void *ptr) {
     robj *o = zmalloc(sizeof(*o));
     o->type = type;
@@ -44,12 +45,14 @@ robj *createObject(int type, void *ptr) {
     o->refcount = 1;
 
     /* Set the LRU to the current lruclock (minutes resolution). */
+    /* LRU 时间 */
     o->lru = LRU_CLOCK();
     return o;
 }
 
 /* Create a string object with encoding REDIS_ENCODING_RAW, that is a plain
  * string object where o->ptr points to a proper sds string. */
+/* 创建一个RAW string类型的对象（字符串较长（长度>39）的情况用这种类型） */
 robj *createRawStringObject(char *ptr, size_t len) {
     return createObject(REDIS_STRING,sdsnewlen(ptr,len));
 }
@@ -57,7 +60,11 @@ robj *createRawStringObject(char *ptr, size_t len) {
 /* Create a string object with encoding REDIS_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
+/* 创建一个embedded string对象（字符串较短（长度<=39）的情况用这种类型） */
 robj *createEmbeddedStringObject(char *ptr, size_t len) {
+    // sizeof(robj) = 16, sizeof(struct sdshdr) = 8, '\0'需要占用1个字节，存储一个字符串至少要16+8+1 = 25字节
+    // 而调用jemalloc来分配25字节的内存，实际会占用64字节，为了不浪费空间，长度小于64-25=39的字符串会直接存放在sdshdr后面
+    // 存储顺序如下： | robj | sdshdr | string | '\0' |
     robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr)+len+1);
     struct sdshdr *sh = (void*)(o+1);
 
@@ -84,6 +91,7 @@ robj *createEmbeddedStringObject(char *ptr, size_t len) {
  *
  * The current limit of 39 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
+/* 设置字符串对象，字符串长度<=39为embedded类型，大于39为raw类型 */
 #define REDIS_ENCODING_EMBSTR_SIZE_LIMIT 39
 robj *createStringObject(char *ptr, size_t len) {
     if (len <= REDIS_ENCODING_EMBSTR_SIZE_LIMIT)
@@ -94,15 +102,20 @@ robj *createStringObject(char *ptr, size_t len) {
 
 robj *createStringObjectFromLongLong(long long value) {
     robj *o;
+    // 对于[0,10000)之间的value，直接引用共享变量，[0,10000)之间的long long整型被缓存了起来
+    // 对于在[LONG_MIN, 0)和[10000, LONG_MAX]区间的long long value，直接存储到ptr里面，这个里面的[LONG_MIN,LONG_MAX]实际上是long类型的取值范围
+    // 对于long long value超出long值域的范围，以REDIS_STRING类型存放
     if (value >= 0 && value < REDIS_SHARED_INTEGERS) {
         incrRefCount(shared.integers[value]);
         o = shared.integers[value];
     } else {
+        //类型是STRING，编码是INT
         if (value >= LONG_MIN && value <= LONG_MAX) {
             o = createObject(REDIS_STRING, NULL);
             o->encoding = REDIS_ENCODING_INT;
             o->ptr = (void*)((long)value);
         } else {
+            //类型是STRING，编码是RAW
             o = createObject(REDIS_STRING,sdsfromlonglong(value));
         }
     }
@@ -115,10 +128,12 @@ robj *createStringObjectFromLongLong(long long value) {
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
+/* 将long double数据类型存储为字符串对象 */
 robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
     char buf[256];
     int len;
 
+    //判断是否为无穷大
     if (isinf(value)) {
         /* Libc in odd systems (Hi Solaris!) will format infinite in a
          * different way, so better to handle it in an explicit way. */
@@ -159,6 +174,8 @@ robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
  * will always result in a fresh object that is unshared (refcount == 1).
  *
  * The resulting object always has refcount set to 1. */
+/* 复制字符串对象包括了raw和embstr两种类型，
+ * REDIS_ENCODING_INT的数字是直接存储在ptr上的，所以可以d->ptr = o->ptr直接赋值 */
 robj *dupStringObject(robj *o) {
     robj *d;
 
@@ -180,6 +197,7 @@ robj *dupStringObject(robj *o) {
     }
 }
 
+/* 创建列表对象 */
 robj *createListObject(void) {
     list *l = listCreate();
     robj *o = createObject(REDIS_LIST,l);
@@ -188,6 +206,7 @@ robj *createListObject(void) {
     return o;
 }
 
+/* 创建ziplist对象 */
 robj *createZiplistObject(void) {
     unsigned char *zl = ziplistNew();
     robj *o = createObject(REDIS_LIST,zl);
@@ -195,6 +214,7 @@ robj *createZiplistObject(void) {
     return o;
 }
 
+/* 创建字典对象 */
 robj *createSetObject(void) {
     dict *d = dictCreate(&setDictType,NULL);
     robj *o = createObject(REDIS_SET,d);
@@ -202,6 +222,7 @@ robj *createSetObject(void) {
     return o;
 }
 
+/* 创建整数集合对象 */
 robj *createIntsetObject(void) {
     intset *is = intsetNew();
     robj *o = createObject(REDIS_SET,is);
@@ -209,6 +230,7 @@ robj *createIntsetObject(void) {
     return o;
 }
 
+/* 创建hash对象，暂时不太明白hash和字典的使用区别 */
 robj *createHashObject(void) {
     unsigned char *zl = ziplistNew();
     robj *o = createObject(REDIS_HASH, zl);
@@ -216,6 +238,7 @@ robj *createHashObject(void) {
     return o;
 }
 
+/* 创建有序集合对象，zset是有序集合，set是无序集合 */
 robj *createZsetObject(void) {
     zset *zs = zmalloc(sizeof(*zs));
     robj *o;
@@ -342,6 +365,7 @@ robj *resetRefCount(robj *obj) {
     return obj;
 }
 
+/* 检查类型，比对type字段 */
 int checkType(redisClient *c, robj *o, int type) {
     if (o->type != type) {
         addReply(c,shared.wrongtypeerr);
@@ -350,6 +374,7 @@ int checkType(redisClient *c, robj *o, int type) {
     return 0;
 }
 
+/* 判断对象能否能用long long表示其中的数据 */
 int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
     if (o->encoding == REDIS_ENCODING_INT) {
@@ -361,6 +386,7 @@ int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
 }
 
 /* Try to encode a string object in order to save space */
+/* 为了节省空间，改变对象的编码类型 */
 robj *tryObjectEncoding(robj *o) {
     long value;
     sds s = o->ptr;
@@ -375,22 +401,29 @@ robj *tryObjectEncoding(robj *o) {
     /* We try some specialized encoding only for objects that are
      * RAW or EMBSTR encoded, in other words objects that are still
      * in represented by an actually array of chars. */
+    /* 只编码RAW或EMBSTR类型的对象 */
     if (!sdsEncodedObject(o)) return o;
 
     /* It's not safe to encode shared objects: shared objects can be shared
      * everywhere in the "object space" of Redis and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
+    /* 如果对象在别处有引用，直接返回 */
      if (o->refcount > 1) return o;
 
     /* Check if we can represent this string as a long integer.
      * Note that we are sure that a string larger than 21 chars is not
      * representable as a 32 nor 64 bit integer. */
+    /* 对于[0, 10000)的long型变量专用shared object */
     len = sdslen(s);
     if (len <= 21 && string2l(s,len,&value)) {
         /* This object is encodable as a long. Try to use a shared object.
          * Note that we avoid using shared integers when maxmemory is used
          * because every object needs to have a private LRU field for the LRU
          * algorithm to work well. */
+        /* 当LRU数据淘汰机制同时不满足volatile-lru和allkeys-lru的时候，使用shared object
+         * 或者当redis最大可用内存为0的时候，也可以使用shared object
+         * 以上两点不满足，encoding转为INT，释放原来ptr上面的字符串，直接把value赋值给ptr
+         * */
         if ((server.maxmemory == 0 ||
              (server.maxmemory_policy != REDIS_MAXMEMORY_VOLATILE_LRU &&
               server.maxmemory_policy != REDIS_MAXMEMORY_ALLKEYS_LRU)) &&
@@ -412,6 +445,7 @@ robj *tryObjectEncoding(robj *o) {
      * try the EMBSTR encoding which is more efficient.
      * In this representation the object and the SDS string are allocated
      * in the same chunk of memory to save space and cache misses. */
+    /* RAW -> EMBSTR，针对满足EMBSTR的RAW转到EMBSTR */
     if (len <= REDIS_ENCODING_EMBSTR_SIZE_LIMIT) {
         robj *emb;
 
@@ -430,6 +464,7 @@ robj *tryObjectEncoding(robj *o) {
      * We do that only for relatively large strings as this branch
      * is only entered if the length of the string is greater than
      * REDIS_ENCODING_EMBSTR_SIZE_LIMIT. */
+    /* 还有最后一招：对于RAW对象，如果可用空间大于总空间的10%，释放这部分的可用空间 */
     if (o->encoding == REDIS_ENCODING_RAW &&
         sdsavail(s) > len/10)
     {
@@ -442,6 +477,9 @@ robj *tryObjectEncoding(robj *o) {
 
 /* Get a decoded version of an encoded object (returned as a new object).
  * If the object is already raw-encoded just increment the ref count. */
+/* 获取对象的RAW形式
+ * 如果入参传入的已经是RAW或EMBSTR形式的对象，只需要累加引用计数 
+ * 对于入参传入的是INT，转成RAW或EMBSTR形式的对象*/
 robj *getDecodedObject(robj *o) {
     robj *dec;
 
@@ -471,6 +509,7 @@ robj *getDecodedObject(robj *o) {
 #define REDIS_COMPARE_BINARY (1<<0)
 #define REDIS_COMPARE_COLL (1<<1)
 
+/* 比较两个字符串对象是否相等，支持BINARY二进制比较和COLL字符排列顺序比较 */
 int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
     redisAssertWithInfo(NULL,a,a->type == REDIS_STRING && b->type == REDIS_STRING);
     char bufa[128], bufb[128], *astr, *bstr;
@@ -517,6 +556,7 @@ int collateStringObjects(robj *a, robj *b) {
  * point of view of a string comparison, otherwise 0 is returned. Note that
  * this function is faster then checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. */
+/* 二进制比对对象，如果是两个INT对象比较，直接比较ptr，其余情况进行二进制比较 */
 int equalStringObjects(robj *a, robj *b) {
     if (a->encoding == REDIS_ENCODING_INT &&
         b->encoding == REDIS_ENCODING_INT){
@@ -528,6 +568,7 @@ int equalStringObjects(robj *a, robj *b) {
     }
 }
 
+/* 获取string对象内容的长度 */
 size_t stringObjectLen(robj *o) {
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
     if (sdsEncodedObject(o)) {
@@ -539,6 +580,7 @@ size_t stringObjectLen(robj *o) {
     }
 }
 
+/* 从对象中获取double类型的值 */
 int getDoubleFromObject(robj *o, double *target) {
     double value;
     char *eptr;
@@ -567,6 +609,7 @@ int getDoubleFromObject(robj *o, double *target) {
     return REDIS_OK;
 }
 
+/* 从对象中获取double类型的值，如果获取失败设置错误消息msg */
 int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const char *msg) {
     double value;
     if (getDoubleFromObject(o, &value) != REDIS_OK) {
@@ -581,6 +624,7 @@ int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const ch
     return REDIS_OK;
 }
 
+/* 从对象获取long double变量 */
 int getLongDoubleFromObject(robj *o, long double *target) {
     long double value;
     char *eptr;
@@ -605,6 +649,7 @@ int getLongDoubleFromObject(robj *o, long double *target) {
     return REDIS_OK;
 }
 
+/* 从对象获取long double变量，获取失败可设置错误信息msg */
 int getLongDoubleFromObjectOrReply(redisClient *c, robj *o, long double *target, const char *msg) {
     long double value;
     if (getLongDoubleFromObject(o, &value) != REDIS_OK) {
@@ -619,6 +664,7 @@ int getLongDoubleFromObjectOrReply(redisClient *c, robj *o, long double *target,
     return REDIS_OK;
 }
 
+/* 从对象获取long long变量 */
 int getLongLongFromObject(robj *o, long long *target) {
     long long value;
     char *eptr;
@@ -643,6 +689,7 @@ int getLongLongFromObject(robj *o, long long *target) {
     return REDIS_OK;
 }
 
+/* 从对象获取long long变量，获取失败可设置错误信息msg */
 int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, const char *msg) {
     long long value;
     if (getLongLongFromObject(o, &value) != REDIS_OK) {
@@ -657,6 +704,7 @@ int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, con
     return REDIS_OK;
 }
 
+/* 从对象获取long变量，获取失败可设置错误信息msg */
 int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *msg) {
     long long value;
 
@@ -673,6 +721,7 @@ int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *
     return REDIS_OK;
 }
 
+/* 输入对象编码类型返回对应字符串 */
 char *strEncoding(int encoding) {
     switch(encoding) {
     case REDIS_ENCODING_RAW: return "raw";
@@ -689,6 +738,7 @@ char *strEncoding(int encoding) {
 
 /* Given an object returns the min number of milliseconds the object was never
  * requested, using an approximated LRU algorithm. */
+/* 获取对象闲置时间 */
 unsigned long long estimateObjectIdleTime(robj *o) {
     unsigned long long lruclock = LRU_CLOCK();
     if (lruclock >= o->lru) {
@@ -708,6 +758,7 @@ robj *objectCommandLookup(redisClient *c, robj *key) {
     return (robj*) dictGetVal(de);
 }
 
+/* 查找命令 */
 robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
     robj *o = objectCommandLookup(c,key);
 
