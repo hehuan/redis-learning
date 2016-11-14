@@ -339,7 +339,7 @@ listNode *listIndex(list *list, long index) {
 }
 
 /* Rotate the list removing the tail node and inserting it to the head. */
-/* 翻转链表（在原链表上修改） */
+/* 把链表的最后一个节点放到第一个之前，作为新的头节点 */
 void listRotate(list *list) {
     listNode *tail = list->tail;
 

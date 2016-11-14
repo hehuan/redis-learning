@@ -876,6 +876,7 @@ unsigned int getLRUClock(void) {
 }
 
 /* Add a sample to the operations per second array of samples. */
+//采样一些信息
 void trackInstantaneousMetric(int metric, long long current_reading) {
     long long t = mstime() - server.inst_metric[metric].last_sample_time;
     long long ops = current_reading -
@@ -970,6 +971,8 @@ void clientsCron(void) {
      * per call. Since this function is called server.hz times per second
      * we are sure that in the worst case we process all the clients in 1
      * second. */
+    //确保最坏情况也能在1s之内把所有客户端处理完毕，clientCron的调用频率是server.hz，
+    //每次处理numclients/server.hz，所以1s的时间处理了numclients
     int numclients = listLength(server.clients);
     int iterations = numclients/server.hz;
     mstime_t now = mstime();
@@ -977,6 +980,7 @@ void clientsCron(void) {
     /* Process at least a few clients while we are at it, even if we need
      * to process less than CLIENTS_CRON_MIN_ITERATIONS to meet our contract
      * of processing each client once per second. */
+    //设置每次迭代的数量numclients>=5的，每次迭代处理5次；不足的迭代次数等于numclients
     if (iterations < CLIENTS_CRON_MIN_ITERATIONS)
         iterations = (numclients < CLIENTS_CRON_MIN_ITERATIONS) ?
                      numclients : CLIENTS_CRON_MIN_ITERATIONS;
@@ -1080,11 +1084,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
+    //watchdog_period：发送SIGALRM的时间间隔
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
 
     /* Update the time cache. */
+    //更新缓存时间
     updateCachedTime();
 
+    //每隔100ms采样一些信息：命令信息、网络输入输出
     run_with_period(100) {
         trackInstantaneousMetric(REDIS_METRIC_COMMAND,server.stat_numcommands);
         trackInstantaneousMetric(REDIS_METRIC_NET_INPUT,
@@ -1104,17 +1111,21 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      *
      * Note that you can change the resolution altering the
      * REDIS_LRU_CLOCK_RESOLUTION define. */
+    //获取lru时钟，时间精度是ms
     server.lruclock = getLRUClock();
 
     /* Record the max memory used since the server was started. */
+    //记录Redis内存使用峰值
     if (zmalloc_used_memory() > server.stat_peak_memory)
         server.stat_peak_memory = zmalloc_used_memory();
 
     /* Sample the RSS here since this is a relatively slow call. */
+    //获取RSS大小
     server.resident_set_size = zmalloc_get_rss();
 
     /* We received a SIGTERM, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
+    //接收到SIGTERM信号后处理
     if (server.shutdown_asap) {
         if (prepareForShutdown(0) == REDIS_OK) exit(0);
         redisLog(REDIS_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
@@ -1122,6 +1133,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Show some info about non-empty databases */
+    //每隔5000ms打印数据库的一些信息
     run_with_period(5000) {
         for (j = 0; j < server.dbnum; j++) {
             long long size, used, vkeys;
@@ -1137,6 +1149,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Show information about connected clients */
+    //每隔5000ms打印客户端的连接数量，以及内存的使用情况
     if (!server.sentinel_mode) {
         run_with_period(5000) {
             redisLog(REDIS_VERBOSE,

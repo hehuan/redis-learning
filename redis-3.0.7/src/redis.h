@@ -407,6 +407,9 @@ typedef long long mstime_t; /* millisecond time type. */
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
  * The actual resolution depends on server.hz. */
+//每隔_ms_时间执行一次
+//如果_ms_ <= 1000/server.hz，每次执行到serverCron的时候都会满足这个条件，执行相关语句
+//如果_ms_ > 1000/server.hz，则需要serverCron每执行_ms_/(1000/server.hz)次会执行相关语句
 #define run_with_period(_ms_) if ((_ms_ <= 1000/server.hz) || !(server.cronloops%((_ms_)/(1000/server.hz))))
 
 /* We can print the stacktrace, so our assert is defined this way: */
@@ -674,7 +677,7 @@ struct redisServer {
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;
     unsigned lruclock:REDIS_LRU_BITS; /* Clock for LRU eviction */
-    int shutdown_asap;          /* SHUTDOWN needed ASAP */
+    int shutdown_asap;          /* SHUTDOWN needed ASAP */ /* shutdown as soon as possible，连续两次接收Ctrl-C的时候，此标志被设置成1 */
     int activerehashing;        /* Incremental rehash in serverCron() */
     char *requirepass;          /* Pass for AUTH command, or NULL */
     char *pidfile;              /* PID file path */
@@ -933,17 +936,26 @@ typedef struct pubsubPattern {
 typedef void redisCommandProc(redisClient *c);
 typedef int *redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 struct redisCommand {
+    //命令名称
     char *name;
+    //命令处理对应的方法
     redisCommandProc *proc;
+    //命令带的参数的个数 如果arity<0，表示至少要有arity个参数 如果arity>0，表示必须有确切的arity个参数
     int arity;
+    //属性标志位
     char *sflags; /* Flags as string representation, one char per flag. */
+    //bit形式的属性标志位：sflags解析后的结果
     int flags;    /* The actual flags, obtained from the 'sflags' field. */
     /* Use a function to determine keys arguments in a command line.
      * Used for Redis Cluster redirect. */
+    //处理参数列表函数，获取参数列表中的key
     redisGetKeysProc *getkeys_proc;
     /* What keys should be loaded in background when calling this command? */
+    //第一个key的位置
     int firstkey; /* The first argument that's a key (0 = no keys) */
+    //最后一个key的位置
     int lastkey;  /* The last argument that's a key */
+    //第一个key和最后一个key之间相差的步进
     int keystep;  /* The step between first and last key */
     long long microseconds, calls;
 };
