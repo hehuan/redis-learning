@@ -45,6 +45,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
         zfree(state);
         return -1;
     }
+    // 从Linux 2.6.8开始epoll_create(size)的size被忽略，但size的取值必须大于0
     state->epfd = epoll_create(1024); /* 1024 is just a hint for the kernel */
     if (state->epfd == -1) {
         zfree(state->events);
@@ -118,6 +119,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
 
         numevents = retval;
         for (j = 0; j < numevents; j++) {
+            //如果有事件发生，放在fired数组里面
             int mask = 0;
             struct epoll_event *e = state->events+j;
 

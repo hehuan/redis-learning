@@ -80,6 +80,9 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
+    //以epoll为例：eventLoop->apidata->epfd是epoll_create返回的fd，
+    //注意apidata的类型是aeApiState，aeApiState结构随着使用
+    //epoll、poll和select等的不同，aeApiState结构也会有所不同 这里的以epoll为例
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
@@ -137,6 +140,7 @@ void aeStop(aeEventLoop *eventLoop) {
     eventLoop->stop = 1;
 }
 
+/* 文件I/O事件注册 */
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData)
 {
@@ -146,6 +150,7 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
+    //以epoll为例，主要是调用epoll_ctl
     if (aeApiAddEvent(eventLoop, fd, mask) == -1)
         return AE_ERR;
     fe->mask |= mask;
@@ -265,6 +270,7 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
  *    Much better but still insertion or deletion of timers is O(N).
  * 2) Use a skiplist to have this operation as O(1) and insertion as O(log(N)).
  */
+//找出最近要超时的那个Timer对象，就是找出when_sec和when_ms最小的那个对象
 static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 {
     aeTimeEvent *te = eventLoop->timeEventHead;
@@ -295,6 +301,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
      * events to be processed ASAP when this happens: the idea is that
      * processing events earlier is less dangerous than delaying them
      * indefinitely, and practice suggests it is. */
+    //如果系统时间被修改，when_sec被设置为0，定时器事件要求被尽快处理
     if (now < eventLoop->lastTime) {
         te = eventLoop->timeEventHead;
         while(te) {
@@ -304,6 +311,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     }
     eventLoop->lastTime = now;
 
+    //遍历所有定时器事件，查找触发的事件，然后回调处理函数
     te = eventLoop->timeEventHead;
     maxId = eventLoop->timeEventNextId-1;
     while(te) {
@@ -321,6 +329,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             int retval;
 
             id = te->id;
+            //定时器回调函数
             retval = te->timeProc(eventLoop, id, te->clientData);
             processed++;
             /* After an event is processed our time event list may
@@ -336,6 +345,8 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
              * to flag deleted elements in a special way for later
              * deletion (putting references to the nodes to delete into
              * another linked list). */
+            //如果定时器回调函数返回AE_NOMORE，说明该定时器事件是一次性的，执行完后要delete
+            //非AE_NOMORE的定时器下一次的触发时间设置为(when_sec,when_ms) + retval ms (retvel是回掉函数timeProc返回的)
             if (retval != AE_NOMORE) {
                 aeAddMillisecondsToNow(retval,&te->when_sec,&te->when_ms);
             } else {
@@ -380,7 +391,10 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         struct timeval tv, *tvp;
 
         if (flags & AE_TIME_EVENTS && !(flags & AE_DONT_WAIT))
+            //查找下一次最先发生的定时器事件
             shortest = aeSearchNearestTimer(eventLoop);
+        //计算当前时刻到最近发生定时器事件的时间间隔，这个时间间隔就是用来设置后面epoll_wait的阻塞时间，
+        //如果没有定时器时间，epoll_wait就一直阻塞
         if (shortest) {
             long now_sec, now_ms;
 
@@ -420,6 +434,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 	    /* note the fe->mask & mask & ... code: maybe an already processed
              * event removed an element that fired and we still didn't
              * processed, so we check if the event is still valid. */
+            //回调事件处理函数
             if (fe->mask & mask & AE_READABLE) {
                 rfired = 1;
                 fe->rfileProc(eventLoop,fd,fe->clientData,mask);
@@ -432,6 +447,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         }
     }
     /* Check time events */
+    //处理定时器事件
     if (flags & AE_TIME_EVENTS)
         processed += processTimeEvents(eventLoop);
 
@@ -460,6 +476,7 @@ int aeWait(int fd, int mask, long long milliseconds) {
     }
 }
 
+//事件主循环
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
     while (!eventLoop->stop) {

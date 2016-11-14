@@ -1686,6 +1686,7 @@ int listenToPort(int port, int *fds, int *count) {
      * entering the loop if j == 0. */
     if (server.bindaddr_count == 0) server.bindaddr[0] = NULL;
     for (j = 0; j < server.bindaddr_count || j == 0; j++) {
+        //基本上是socket bind listen的操作
         if (server.bindaddr[j] == NULL) {
             /* Bind * for both IPv6 and IPv4, we enter here only if
              * server.bindaddr_count == 0. */
@@ -1757,8 +1758,7 @@ void resetServerStats(void) {
     server.aof_delayed_fsync = 0;
 }
 
-/* 对redis server进行初始化
- */
+/* 对redis server进行初始化 */
 void initServer(void) {
     int j;
     //忽略SIGHUP和SIGPIPE信号，设置SIGTERM和SIGINT的handler，均为sigShutdownHandler
@@ -1766,7 +1766,7 @@ void initServer(void) {
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
-    //syslog_enabled默认不开启
+    //syslog默认不开启
     if (server.syslog_enabled) {
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             server.syslog_facility);
@@ -1785,8 +1785,11 @@ void initServer(void) {
     server.get_ack_from_slaves = 0;
     server.clients_paused = 0;
 
+    //创建常用的对象
     createSharedObjects();
+    //调整最多打开文件数量值
     adjustOpenFilesLimit();
+    //初始化eventLoop
     server.el = aeCreateEventLoop(server.maxclients+REDIS_EVENTLOOP_FDSET_INCR);
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
@@ -1848,11 +1851,12 @@ void initServer(void) {
     server.aof_last_write_status = REDIS_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
+    //更细时间缓存 [[这个缓存时间是拿来做什么的]]
     updateCachedTime();
 
     /* Create the serverCron() time event, that's our main way to process
      * background operations. */
-    /* 设置时间时间结构体 */
+    //新加定时器事件serverCron
     if(aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         redisPanic("Can't create the serverCron time event.");
         exit(1);
@@ -1860,7 +1864,10 @@ void initServer(void) {
 
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
+    /* 设置文件事件对象 ipfd是socket fd，ipfd_count是socket fd的总数量 
+     * TCP套接字的handler是acceptTcpHandler，用于连接的创建 */
     for (j = 0; j < server.ipfd_count; j++) {
+        //网络IO事件注册，handler是acceptTcpHandler
         if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
             acceptTcpHandler,NULL) == AE_ERR)
             {
@@ -1868,6 +1875,7 @@ void initServer(void) {
                     "Unrecoverable error creating server.ipfd file event.");
             }
     }
+    //如果是Unix domain 套接字，handler是acceptUnixHandler
     if (server.sofd > 0 && aeCreateFileEvent(server.el,server.sofd,AE_READABLE,
         acceptUnixHandler,NULL) == AE_ERR) redisPanic("Unrecoverable error creating server.sofd file event.");
 
@@ -3612,6 +3620,7 @@ int main(int argc, char **argv) {
     gettimeofday(&tv,NULL);
     dictSetHashFunctionSeed(tv.tv_sec^tv.tv_usec^getpid());
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    //设置配置默认值
     initServerConfig();
 
     /* We need to init sentinel right now as parsing the configuration file
@@ -3622,6 +3631,7 @@ int main(int argc, char **argv) {
         initSentinel();
     }
 
+    //解析命令行
     if (argc >= 2) {
         int j = 1; /* First option to parse in argv[] */
         sds options = sdsempty();
@@ -3676,25 +3686,36 @@ int main(int argc, char **argv) {
             exit(1);
         }
         if (configfile) server.configfile = getAbsolutePath(configfile);
+        //从配置文件中加载配置
         resetServerSaveParams();
         loadServerConfig(configfile,options);
         sdsfree(options);
     } else {
         redisLog(REDIS_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
     }
+    //daemon化进程
     if (server.daemonize) daemonize();
     initServer();
+    //如果是daemon方式运行，创建Pid文件
     if (server.daemonize) createPidFile();
+    //重新设置进程名称，即ps命令看到的进程名称 打印格式： %s %s:%d %s
+    //argv[0] 绑定IP地址 端口 cluster模式/sentinel模式 [[怎样重命名进程名称的没看明白]]
     redisSetProcTitle(argv[0]);
+    //Ascii的艺术，就是运行redis刚开始打印出来的那些日志
     redisAsciiArt();
+    //检查系统中每一个端口最大的监听队列的长度，如果Redis配置的tcp_backlog小于系统值，会打印警告
     checkTcpBacklogSettings();
 
     if (!server.sentinel_mode) {
         /* Things not needed when running in Sentinel mode. */
         redisLog(REDIS_WARNING,"Server started, Redis version " REDIS_VERSION);
+        // 内存警告信息
+        // 检查/proc/sys/vm/overcommit_memory 该文件指定内核针对内存分配的策略  Redis建议配置成1：允许分配所有的物理内存 配置成0对打印警告，0的意思是内存不够就不申请了
+        // 检查/sys/kernel/mm/transparent_hugepage/enabled是否开启 这是大内存页面开关
     #ifdef __linux__
         linuxMemoryWarnings();
     #endif
+        //从RDB或AOF加载数据
         loadDataFromDisk();
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == REDIS_ERR) {
@@ -3718,6 +3739,7 @@ int main(int argc, char **argv) {
     }
 
     aeSetBeforeSleepProc(server.el,beforeSleep);
+    //调用aeMain进入事件主循环
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
     return 0;
