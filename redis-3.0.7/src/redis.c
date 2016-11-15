@@ -910,6 +910,8 @@ long long getInstantaneousMetric(int metric) {
 int clientsCronHandleTimeout(redisClient *c, mstime_t now_ms) {
     time_t now = now_ms/1000;
 
+    //如果客户端空闲连接时间超过server.maxidletime，需要断开客户端的连接
+    //server.maxidletime默认的值是0，即断开客户端的连接
     if (server.maxidletime &&
         !(c->flags & REDIS_SLAVE) &&    /* no timeout for slaves */
         !(c->flags & REDIS_MASTER) &&   /* no timeout for masters */
@@ -925,6 +927,9 @@ int clientsCronHandleTimeout(redisClient *c, mstime_t now_ms) {
          * However note that the actual resolution is limited by
          * server.hz. */
 
+        //在acceptCommonHandler -> createClient 中看到的是c->bpop.timeout被初始化成了0
+        //如果在非集群模式下server.cluster_enabled关闭，下面的if和else的内容都不会被执行到
+        //[[if和else里面具体拿来干什么用的，还是不太明白]]
         if (c->bpop.timeout != 0 && c->bpop.timeout < now_ms) {
             /* Handle blocking operation specific timeout. */
             replyToBlockedClientTimedOut(c);
@@ -943,6 +948,7 @@ int clientsCronHandleTimeout(redisClient *c, mstime_t now_ms) {
  * free space not used, this function reclaims space if needed.
  *
  * The function always returns 0 as it never terminates the client. */
+//如果querybuf有很多内存尚未使用，释放掉
 int clientsCronResizeQueryBuffer(redisClient *c) {
     size_t querybuf_size = sdsAllocSize(c->querybuf);
     time_t idletime = server.unixtime - c->lastinteraction;
@@ -950,6 +956,7 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
     /* There are two conditions to resize the query buffer:
      * 1) Query buffer is > BIG_ARG and too big for latest peak.
      * 2) Client is inactive and the buffer is bigger than 1k. */
+    //在两种情形下释放多余的内存：1.query buffer>32KB并远大于最近的query buffer内存使用的峰值 2.query buffer>1KB且idletime>2
     if (((querybuf_size > REDIS_MBULK_BIG_ARG) &&
          (querybuf_size/(c->querybuf_peak+1)) > 2) ||
          (querybuf_size > 1024 && idletime > 2))
